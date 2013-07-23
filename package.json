@@ -1,21 +1,21 @@
 {
-  "name": "ip-tag",
+  "name": "glpidb",
   "types": ["module"],
   "version": "1.4",
-  "homepage": "http://github.com/shinken-monitoring/mod-ip-tag",
-  "author": "Jean Gabès",
-  "description": "Tag host by their IP ranges",
+  "homepage": "http://github.com/shinken-monitoring/mod-glpidb",
+  "author": "David Durrieux",
+  "description": "Export monitoring data into the GLPI montoring module.",
   "contributors": [
     {
-      "name": "Jean Gabès",
-      "email": "naparuba@gmail.com"
+      "name": "David Durrieux",
+      "email": "d.durieux@siprossii.com"
     }
   ],
-  "repository": "https://github.com/shinken-monitoring/mod-ip-tag",
+  "repository": "https://github.com/shinken-monitoring/mod-glpidb",
   "keywords": [
     "module",
-    "arbiter",
-    "ip"
+    "broker",
+    "glpi"
   ],
   "dependencies": {
     "shinken": ">=1.4"
