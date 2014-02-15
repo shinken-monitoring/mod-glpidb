@@ -1,14 +1,18 @@
 {
   "name": "glpidb",
   "types": ["module"],
-  "version": "1.4",
+  "version": "2.0",
   "homepage": "http://github.com/shinken-monitoring/mod-glpidb",
   "author": "David Durrieux",
-  "description": "Export monitoring data into the GLPI montoring module.",
+  "description": "Export monitoring data into the GLPI database, in plugin monitoring plugin.",
   "contributors": [
     {
       "name": "David Durrieux",
       "email": "d.durieux@siprossii.com"
+    },
+    {
+      "name": "Frederic Mohier",
+      "email": "frederic.mohier@ipmfrance.com"
     }
   ],
   "repository": "https://github.com/shinken-monitoring/mod-glpidb",
@@ -18,7 +22,7 @@
     "glpi"
   ],
   "dependencies": {
-    "shinken": ">=1.4"
+    "shinken": ">=2.0"
   },
   "license": "AGPL"
 }
