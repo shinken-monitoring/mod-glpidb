@@ -46,16 +46,16 @@ properties = {
 
 
 # Called by the plugin manager to get a broker
-def get_instance(mod_conf):
-    logger.info("[GLPIdb broker] Get a glpidb data module for plugin %s" % mod_conf.get_name())
-    instance = Glpidb_broker(mod_conf)
+def get_instance(plugin):
+    logger.info("[GLPIdb broker] Get a glpidb data module for plugin %s" % plugin.get_name())
+    instance = Glpidb_broker(plugin)
     return instance
 
 
 # Class for the Glpidb Broker
 # Get broks and puts them in GLPI database
 class Glpidb_broker(BaseModule):
-    def __init__(self, modconf, host=None, user=None, password=None, database=None, character_set=None, database_path=None):
+    def __init__(self, modconf):
         # Mapping for name of data, rename attributes and transform function
         self.mapping = {
            # Host
@@ -84,27 +84,30 @@ class Glpidb_broker(BaseModule):
            }
            
         BaseModule.__init__(self, modconf)
-        self.host = host
-        self.user = user
-        self.password = password
-        self.database = database
-        self.character_set = character_set
-        self.database_path = database_path
-
-        from shinken.db_mysql import DBMysql
-        logger.info("[GLPIdb Broker] Creating a mysql backend")
-        self.db_backend = DBMysql(host, user, password, database, character_set)
 
         self.cache_host_id = {}
         self.cache_host_items_id = {}
         self.cache_host_itemtype = {}
         self.cache_service_items_id = {}
         self.cache_service_itemtype = {}
+        try:
+            self.host = getattr(modconf, 'host', '127.0.0.1')
+            self.user = getattr(modconf, 'user', 'shinken')
+            self.password = getattr(modconf, 'password', 'shinken')
+            self.database = getattr(modconf, 'database', 'glpidb')
+            self.character_set = getattr(modconf, 'character_set', 'utf8')
+        except AttributeError:
+            logger.error("[GLPIdb Broker] The module is missing a property, check module declaration in glpidb.cfg")
+            raise
 
     # Called by Broker so we can do init stuff
     # TODO: add conf param to get pass with init
     # Conf from arbiter!
     def init(self):
+        from shinken.db_mysql import DBMysql
+        logger.info("[GLPIdb Broker] Creating a mysql backend : %s (%s)" % (self.host, self.database))
+        self.db_backend = DBMysql(self.host, self.user, self.password, self.database, self.character_set)
+
         logger.info("[GLPIdb Broker] Connecting to database ...")
         self.db_backend.connect_database()
         logger.info("[GLPIdb Broker] Connected")
