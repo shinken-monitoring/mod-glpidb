@@ -212,6 +212,11 @@ class Glpidb_broker(BaseModule):
         # Update service/host in GLPI DB
         manager = 'manage_' + type + '_update_brok'
         if hasattr(self, manager):
+            if 'host_name' in b.data:
+                if not b.data['host_name'] in self.cache_host_id or self.cache_host_id[b.data['host_name']] == -1:
+                    logger.debug("[GLPIdb Broker] host is not defined in Glpi : %s." % b.data['host_name'])
+                    return
+                    
             new_b = self.preprocess(type, b, 0)
             f = getattr(self, manager)
             queries = f(new_b)
@@ -223,6 +228,11 @@ class Glpidb_broker(BaseModule):
         # Add event + perfdata in GLPI DB
         manager = 'manage_' + type + '_addevent_brok'
         if hasattr(self, manager):
+            if 'host_name' in b.data:
+                if not b.data['host_name'] in self.cache_host_id or self.cache_host_id[b.data['host_name']] == -1:
+                    logger.debug("[GLPIdb Broker] host is not defined in Glpi : %s." % b.data['host_name'])
+                    return
+                    
             new_b = self.preprocess(type, b, '1')
             if 'host_name' in new_b.data:
                 if 'service_description' not in new_b.data:
@@ -236,7 +246,7 @@ class Glpidb_broker(BaseModule):
 
     ## Host result
     ## def manage_host_check_result_brok(self, b):
-    ##     logger.info("GLPI: data in DB %s " % b)
+    ##     logger.info("[GLPIdb Broker] data in DB %s " % b)
     ##     b.data['date'] = time.strftime('%Y-%m-%d %H:%M:%S')
     ##     query = self.db_backend.create_insert_query('glpi_plugin_monitoring_serviceevents', b.data)
     ##     return [query]
@@ -246,7 +256,7 @@ class Glpidb_broker(BaseModule):
     def manage_host_check_result_update_brok(self, b):
         if 'host_name' in b.data:
             if not b.data['host_name'] in self.cache_host_id or self.cache_host_id[b.data['host_name']] == -1:
-                logger.debug("GLPI: host is not defined in Glpi : %s." % b.data['host_name'])
+                logger.debug("[GLPIdb Broker] host is not defined in Glpi : %s." % b.data['host_name'])
                 return
 
         logger.info("[GLPIdb Broker] Host data in DB %s " % b)
@@ -283,7 +293,7 @@ class Glpidb_broker(BaseModule):
     def manage_service_check_result_addevent_brok(self, b):
         # if 'host_name' in b.data:
             # if not b.data['host_name'] in self.cache_host_id or self.cache_host_id[data['host_name']] == -1:
-                # logger.info("GLPI: host is not defined in Glpi : %s." % b.data['host_name'])
+                # logger.info("[GLPIdb Broker] host is not defined in Glpi : %s." % b.data['host_name'])
                 # return
 
         if not b.data['host_name'] in self.cache_service_itemtype or not b.data['service_description'] in self.cache_service_itemtype[b.data['host_name']]:
@@ -308,7 +318,7 @@ class Glpidb_broker(BaseModule):
            we must not edit GLPI datas!
         """
         if not b.data['host_name'] in self.cache_service_itemtype or not b.data['service_description'] in self.cache_service_itemtype[b.data['host_name']]:
-            logger.debug("GLPI: host is not defined in Glpi.")
+            logger.debug("[GLPIdb Broker] host is not defined in Glpi.")
             return []
 
         logger.info("[GLPIdb Broker] Service data in DB %s " % str(b.data))
