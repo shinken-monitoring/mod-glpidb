@@ -115,28 +115,32 @@ class Glpidb_broker(BaseModule):
     def manage_initial_host_status_brok(self, b):
         data = b.data
         logger.debug("[GLPIdb Broker] Initial host status : %s" % str(data))
-        # logger.info("[GLPIdb Broker] Initial host status : %s" % str(data['customs']))
 
         try:
             self.cache_host_id[data['host_name']] = data['customs']['_HOSTID']
         except:
             self.cache_host_id[data['host_name']] = -1
-            logger.error("[GLPIdb Broker] no custom _HOSTID for %s" % data['host_name'])
+            logger.debug("[GLPIdb Broker] no custom _HOSTID for %s" % data['host_name'])
             
         try:
             self.cache_host_itemtype[data['host_name']] = data['customs']['_ITEMTYPE']
         except:
-            logger.error("[GLPIdb Broker] no custom _ITEMTYPE for %s" % data['host_name'])
+            logger.debug("[GLPIdb Broker] no custom _ITEMTYPE for %s" % data['host_name'])
             
         try:
             self.cache_host_items_id[data['host_name']] = data['customs']['_ITEMSID']
         except:
-            logger.error("[GLPIdb Broker] no custom _ITEMSID for %s" % data['host_name'])
+            logger.debug("[GLPIdb Broker] no custom _ITEMSID for %s" % data['host_name'])
 
     def manage_initial_service_status_brok(self, b):
         data = b.data
         logger.debug("[GLPIdb Broker] Initial service status : %s" % str(data))
         
+        if 'host_name' in b.data:
+            if not b.data['host_name'] in self.cache_host_id or self.cache_host_id[data['host_name']] == -1:
+                logger.debug("GLPIdb: host is not defined in Glpi : %s." % b.data['host_name'])
+                return
+
         if not data['host_name'] in self.cache_service_itemtype:
             self.cache_service_itemtype[data['host_name']] = {}
         self.cache_service_itemtype[data['host_name']][data['service_description']] = data['customs']['_ITEMTYPE']
@@ -148,7 +152,7 @@ class Glpidb_broker(BaseModule):
         new_brok = copy.deepcopy(brok)
         # Only preprocess if we can apply a mapping
         if type in self.mapping:
-            logger.debug("[GLPIdb Broker] brok data: %s" % str(brok.data))
+            # logger.debug("[GLPIdb Broker] brok data: %s" % str(brok.data))
             if 'service_description' in new_brok.data:
                 new_brok.data['id'] = self.cache_service_items_id[brok.data['host_name']][brok.data['service_description']]
                 new_brok.data['items_id'] = self.cache_service_items_id[brok.data['host_name']][brok.data['service_description']]
@@ -166,10 +170,10 @@ class Glpidb_broker(BaseModule):
             for prop in new_brok.data:
             # ex: 'name': 'program_start_time', 'transform'
                 if prop in mapping:
-                    logger.debug("[GLPIdb Broker] Got a prop to change: %s" % prop)
+                    # logger.debug("[GLPIdb Broker] Got a prop to change: %s" % prop)
                     val = new_brok.data[prop]
                     if mapping[prop]['transform'] is not None:
-                        logger.debug("[GLPIdb Broker] Call function for type %s and prop %s" % (type, prop))
+                        # logger.debug("[GLPIdb Broker] Call function for type %s and prop %s" % (type, prop))
                         f = mapping[prop]['transform']
                         val = f(val)
                     name = prop
@@ -240,6 +244,11 @@ class Glpidb_broker(BaseModule):
 
     ## Host result
     def manage_host_check_result_update_brok(self, b):
+        if 'host_name' in b.data:
+            if not b.data['host_name'] in self.cache_host_id or self.cache_host_id[b.data['host_name']] == -1:
+                logger.debug("GLPI: host is not defined in Glpi : %s." % b.data['host_name'])
+                return
+
         logger.info("[GLPIdb Broker] Host data in DB %s " % b)
         
         new_data = copy.deepcopy(b.data)
@@ -272,11 +281,16 @@ class Glpidb_broker(BaseModule):
             
     # Add service event (state + perfdata)
     def manage_service_check_result_addevent_brok(self, b):
-        logger.debug("[GLPIdb Broker] Data in DB %s" % b)
+        # if 'host_name' in b.data:
+            # if not b.data['host_name'] in self.cache_host_id or self.cache_host_id[data['host_name']] == -1:
+                # logger.info("GLPI: host is not defined in Glpi : %s." % b.data['host_name'])
+                # return
 
         if not b.data['host_name'] in self.cache_service_itemtype or not b.data['service_description'] in self.cache_service_itemtype[b.data['host_name']]:
-            logger.info("[GLPIdb Broker] cache not ready ")
+            logger.debug("[GLPIdb Broker] cache not ready ")
             return ''
+
+        logger.debug("[GLPIdb Broker] Data in DB %s" % b)
 
         b.data['date'] = time.strftime('%Y-%m-%d %H:%M:%S')
         b.data['plugin_monitoring_services_id'] = self.cache_service_items_id[b.data['host_name']][b.data['service_description']]
@@ -294,7 +308,7 @@ class Glpidb_broker(BaseModule):
            we must not edit GLPI datas!
         """
         if not b.data['host_name'] in self.cache_service_itemtype or not b.data['service_description'] in self.cache_service_itemtype[b.data['host_name']]:
-            logger.info("GLPI: host is not defined in Glpi.")
+            logger.debug("GLPI: host is not defined in Glpi.")
             return []
 
         logger.info("[GLPIdb Broker] Service data in DB %s " % str(b.data))
