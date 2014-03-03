@@ -150,6 +150,12 @@ class Glpidb_broker(BaseModule):
 
     def preprocess(self, type, brok, checkst):
         new_brok = copy.deepcopy(brok)
+
+        if 'host_name' in brok.data:
+            if not brok.data['host_name'] in self.cache_host_id or self.cache_host_id[data['host_name']] == -1:
+                logger.debug("GLPIdb: host is not defined in Glpi : %s." % brok.data['host_name'])
+                return
+
         # Only preprocess if we can apply a mapping
         if type in self.mapping:
             # logger.debug("[GLPIdb Broker] brok data: %s" % str(brok.data))
