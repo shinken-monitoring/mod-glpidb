@@ -125,12 +125,12 @@ class Glpidb_broker(BaseModule):
         try:
             self.cache_host_itemtype[data['host_name']] = data['customs']['_ITEMTYPE']
         except:
-            logger.debug("[GLPIdb Broker] no custom _ITEMTYPE for %s" % data['host_name'])
+            logger.debug("[GLPIdb Broker] no custom _ITEMTYPE")
             
         try:
             self.cache_host_items_id[data['host_name']] = data['customs']['_ITEMSID']
         except:
-            logger.debug("[GLPIdb Broker] no custom _ITEMSID for %s" % data['host_name'])
+            logger.debug("[GLPIdb Broker] no custom _ITEMSID")
 
     def manage_initial_service_status_brok(self, b):
         data = b.data
@@ -143,18 +143,26 @@ class Glpidb_broker(BaseModule):
 
         if not data['host_name'] in self.cache_service_itemtype:
             self.cache_service_itemtype[data['host_name']] = {}
-        self.cache_service_itemtype[data['host_name']][data['service_description']] = data['customs']['_ITEMTYPE']
+        try:
+            self.cache_service_itemtype[data['host_name']][data['service_description']] = data['customs']['_ITEMTYPE']
+        except:
+            logger.debug("[GLPIdb Broker] no custom _ITEMTYPE")
+            
         if not data['host_name'] in self.cache_service_items_id:
             self.cache_service_items_id[data['host_name']] = {}
-        self.cache_service_items_id[data['host_name']][data['service_description']] = data['customs']['_ITEMSID']
+        try:
+            self.cache_service_items_id[data['host_name']][data['service_description']] = data['customs']['_ITEMSID']
+        except:
+            logger.debug("[GLPIdb Broker] no custom _ITEMSID")
 
     def preprocess(self, type, brok, checkst):
         new_brok = copy.deepcopy(brok)
 
-        if 'host_name' in brok.data:
-            if not brok.data['host_name'] in self.cache_host_id or self.cache_host_id[data['host_name']] == -1:
-                logger.debug("GLPIdb: host is not defined in Glpi : %s." % brok.data['host_name'])
-                return
+        if not 'initial' in type:
+            if 'host_name' in brok.data:
+                if not brok.data['host_name'] in self.cache_host_id or self.cache_host_id[brok.data['host_name']] == -1:
+                    logger.debug("GLPIdb: host is not defined in Glpi : %s / %s." % (type, brok.data['host_name']))
+                    return
 
         # Only preprocess if we can apply a mapping
         if type in self.mapping:
