@@ -17,9 +17,11 @@
   ],
   "repository": "https://github.com/shinken-monitoring/mod-glpidb",
   "keywords": [
+    "mod-glpidb",
     "module",
     "broker",
-    "glpi"
+    "glpi",
+    "database"
   ],
   "dependencies": {
     "shinken": ">=2.0"
