@@ -1,13 +1,13 @@
 {
   "name": "glpidb",
   "types": ["module"],
-  "version": "2.0",
+  "version": "2.1",
   "homepage": "http://github.com/shinken-monitoring/mod-glpidb",
   "author": "David Durieux",
   "description": "Export monitoring data into the GLPI database, in monitoring plugin.",
   "contributors": [
     {
-      "name": "David Durrieux",
+      "name": "David Durieux",
       "email": "d.durieux@siprossii.com"
     },
     {
