@@ -262,7 +262,7 @@ class Glpidb_broker(BaseModule):
         # Insert/update shinken state table
         # Select perfdata regexp
         exists = None
-        query = "SELECT COUNT(*) AS nbRecords FROM `glpi_plugin_monitoring_shinken_states` WHERE hostname='%s' AND service='%s';" % (hostname, service)
+        query = "SELECT COUNT(*) AS nbRecords FROM `glpi_plugin_monitoring_shinkenstates` WHERE hostname='%s' AND service='%s';" % (hostname, service)
         try:
             self.db_backend.execute_query(query)
             res = self.db_backend.fetchone()
@@ -284,13 +284,13 @@ class Glpidb_broker(BaseModule):
         
         if exists:
             where_clause = {'hostname': hostname, 'service': service}
-            query = self.db_backend.create_update_query('glpi_plugin_monitoring_shinken_states', data, where_clause)
+            query = self.db_backend.create_update_query('glpi_plugin_monitoring_shinkenstates', data, where_clause)
             try:
                 self.db_backend.execute_query(query)
             except Exception as exp:
                 logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
         else:
-            query = self.db_backend.create_insert_query('glpi_plugin_monitoring_shinken_states', data)
+            query = self.db_backend.create_insert_query('glpi_plugin_monitoring_shinkenstates', data)
             try:
                 self.db_backend.execute_query(query)
             except Exception as exp:
