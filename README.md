@@ -34,7 +34,7 @@ Enabling GLPIdb Shinken module
 
 To use the glpidb module you must declare it in your broker configuration.
 
-::
+```
 
   define broker {
       ... 
@@ -42,7 +42,7 @@ To use the glpidb module you must declare it in your broker configuration.
       modules    	 ..., glipdb
 
   }
-
+```
 
 The module configuration is defined in the file: glpidb.cfg.
 
@@ -64,7 +64,7 @@ The Shinken state maintains a table indexed upon host/service. This table stores
 The update_shinken_state should be False if you do not have a recent Glpi Monitoring version (at least 0.85+1.1). In any case, this feature will auto disable if the corresponding table does not exist in your Glpi database.
 
 Default configuration file is as is :
-::
+```
 
    ## Module:      glpidb
    ## Loaded by:   Broker
@@ -88,5 +88,4 @@ Default configuration file is as is :
        # Update acknowledges table
        update_acknowledges          True
    }
-
-It's done :)
+```
