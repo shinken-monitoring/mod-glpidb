@@ -32,6 +32,7 @@
 
 import copy
 import time
+import datetime
 import sys
 
 
@@ -41,13 +42,13 @@ from shinken.log import logger
 properties = {
     'daemons': ['broker'],
     'type': 'glpidb',
-    'external': False,
+    'external': True,
 }
 
 
 # Called by the plugin manager to get a broker
 def get_instance(plugin):
-    logger.info("[GLPIdb broker] Get a glpidb data module for plugin %s" % plugin.get_name())
+    logger.info("[glpidb] Get a glpidb data module for plugin %s" % plugin.get_name())
     instance = Glpidb_broker(plugin)
     return instance
 
@@ -56,315 +57,254 @@ def get_instance(plugin):
 # Get broks and puts them in GLPI database
 class Glpidb_broker(BaseModule):
     def __init__(self, modconf):
-        # Mapping for name of data, rename attributes and transform function
-        self.mapping = {
-           # Host
-           'host_check_result': {
-               'event': {'transform': None},
-               'perf_data': {'transform': None},
-               'long_output': {'transform': None},
-               'state': {'transform': None},
-               'latency': {'transform': None},
-               'execution_time': {'transform': None},
-               'state_type': {'transform': None},
-               'host_name': {'transform': None},
-               },
-           # Service
-           'service_check_result': {
-               'event': {'transform': None},
-               'perf_data': {'transform': None},
-               'long_output': {'transform': None},
-               'state': {'transform': None},
-               'latency': {'transform': None},
-               'execution_time': {'transform': None},
-               'state_type': {'transform': None},
-               'service_description': {'transform': None},
-               'host_name': {'transform': None},
-               }
-           }
-           
         BaseModule.__init__(self, modconf)
+        
+        self.hosts_cache = {}
+        self.services_cache = {}
 
-        self.cache_host_id = {}
-        self.cache_host_items_id = {}
-        self.cache_host_itemtype = {}
-        self.cache_service_items_id = {}
-        self.cache_service_itemtype = {}
-        try:
-            self.host = getattr(modconf, 'host', '127.0.0.1')
-            self.user = getattr(modconf, 'user', 'shinken')
-            self.password = getattr(modconf, 'password', 'shinken')
-            self.database = getattr(modconf, 'database', 'glpidb')
-            self.character_set = getattr(modconf, 'character_set', 'utf8')
-        except AttributeError:
-            logger.error("[GLPIdb Broker] The module is missing a property, check module declaration in glpidb.cfg")
-            raise
+        # Database configuration
+        self.host = getattr(modconf, 'host', '127.0.0.1')
+        self.user = getattr(modconf, 'user', 'shinken')
+        self.password = getattr(modconf, 'password', 'shinken')
+        self.database = getattr(modconf, 'database', 'glpidb')
+        self.character_set = getattr(modconf, 'character_set', 'utf8')
+        logger.info("[glpidb] using '%s' database on %s (user = %s)", self.database, self.host, self.user)
 
-    # Called by Broker so we can do init stuff
-    # TODO: add conf param to get pass with init
-    # Conf from arbiter!
+        # Database tables update configuration
+        self.update_shinken_state = getattr(modconf, 'update_shinken_state', False)
+        self.update_services_events = getattr(modconf, 'update_services_events', False)
+        self.update_hosts = getattr(modconf, 'update_hosts', False)
+        self.update_services = getattr(modconf, 'update_services', False)
+        self.update_acknowledges = getattr(modconf, 'update_acknowledges', False)
+        logger.info("[glpidb] updating Shinken state: %s", self.update_shinken_state)
+        logger.info("[glpidb] updating services events: %s", self.update_services_events)
+        logger.info("[glpidb] updating hosts states: %s", self.update_hosts)
+        logger.info("[glpidb] updating services states: %s", self.update_services)
+        logger.info("[glpidb] updating acknowledges states: %s", self.update_acknowledges)
+        
     def init(self):
         from shinken.db_mysql import DBMysql
-        logger.info("[GLPIdb Broker] Creating a mysql backend : %s (%s)" % (self.host, self.database))
+        logger.info("[glpidb] Creating a mysql backend : %s (%s)" % (self.host, self.database))
         self.db_backend = DBMysql(self.host, self.user, self.password, self.database, self.character_set)
 
-        logger.info("[GLPIdb Broker] Connecting to database ...")
+        logger.info("[glpidb] Connecting to database ...")
         self.db_backend.connect_database()
-        logger.info("[GLPIdb Broker] Connected")
-
-    def manage_initial_host_status_brok(self, b):
-        data = b.data
-        logger.debug("[GLPIdb Broker] Initial host status : %s" % str(data))
-
-        try:
-            self.cache_host_id[data['host_name']] = data['customs']['_HOSTID']
-        except:
-            self.cache_host_id[data['host_name']] = -1
-            logger.debug("[GLPIdb Broker] no custom _HOSTID for %s" % data['host_name'])
-            
-        try:
-            self.cache_host_itemtype[data['host_name']] = data['customs']['_ITEMTYPE']
-        except:
-            logger.debug("[GLPIdb Broker] no custom _ITEMTYPE")
-            
-        try:
-            self.cache_host_items_id[data['host_name']] = data['customs']['_ITEMSID']
-        except:
-            logger.debug("[GLPIdb Broker] no custom _ITEMSID")
-
-    def manage_initial_service_status_brok(self, b):
-        data = b.data
-        logger.debug("[GLPIdb Broker] Initial service status : %s" % str(data))
-        
-        if 'host_name' in b.data:
-            if not b.data['host_name'] in self.cache_host_id or self.cache_host_id[data['host_name']] == -1:
-                logger.debug("GLPIdb: host is not defined in Glpi : %s." % b.data['host_name'])
-                return
-
-        if not data['host_name'] in self.cache_service_itemtype:
-            self.cache_service_itemtype[data['host_name']] = {}
-        try:
-            self.cache_service_itemtype[data['host_name']][data['service_description']] = data['customs']['_ITEMTYPE']
-        except:
-            logger.debug("[GLPIdb Broker] no custom _ITEMTYPE")
-            
-        if not data['host_name'] in self.cache_service_items_id:
-            self.cache_service_items_id[data['host_name']] = {}
-        try:
-            self.cache_service_items_id[data['host_name']][data['service_description']] = data['customs']['_ITEMSID']
-        except:
-            logger.debug("[GLPIdb Broker] no custom _ITEMSID")
-
-    def preprocess(self, type, brok, checkst):
-        new_brok = copy.deepcopy(brok)
-
-        if not 'initial' in type:
-            if 'host_name' in brok.data:
-                if not brok.data['host_name'] in self.cache_host_id or self.cache_host_id[brok.data['host_name']] == -1:
-                    logger.debug("GLPIdb: host is not defined in Glpi : %s / %s." % (type, brok.data['host_name']))
-                    return
-
-        # Only preprocess if we can apply a mapping
-        if type in self.mapping:
-            # logger.debug("[GLPIdb Broker] brok data: %s" % str(brok.data))
-            if 'service_description' in new_brok.data:
-                new_brok.data['id'] = self.cache_service_items_id[brok.data['host_name']][brok.data['service_description']]
-                new_brok.data['items_id'] = self.cache_service_items_id[brok.data['host_name']][brok.data['service_description']]
-                new_brok.data['itemtype'] = self.cache_service_itemtype[brok.data['host_name']][brok.data['service_description']]
-            else:
-                new_brok.data['host_id'] = self.cache_host_id[brok.data['host_name']]
-                new_brok.data['items_id'] = self.cache_host_items_id[brok.data['host_name']]
-                new_brok.data['itemtype'] = self.cache_host_itemtype[brok.data['host_name']]
-                
-            new_brok.data['event'] = brok.data['output']
-            
-            to_del = []
-            to_add = []
-            mapping = self.mapping[brok.type]
-            for prop in new_brok.data:
-            # ex: 'name': 'program_start_time', 'transform'
-                if prop in mapping:
-                    # logger.debug("[GLPIdb Broker] Got a prop to change: %s" % prop)
-                    val = new_brok.data[prop]
-                    if mapping[prop]['transform'] is not None:
-                        # logger.debug("[GLPIdb Broker] Call function for type %s and prop %s" % (type, prop))
-                        f = mapping[prop]['transform']
-                        val = f(val)
-                    name = prop
-                    if 'name' in mapping[prop]:
-                        name = mapping[prop]['name']
-                    to_add.append((name, val))
-                    to_del.append(prop)
-                else:
-                    to_del.append(prop)
-            for prop in to_del:
-                del new_brok.data[prop]
-            for (name, val) in to_add:
-                new_brok.data[name] = val
-        else:
-            # print "No preprocess type", brok.type
-            if 'service_description' in brok.data:
-                self.manage_initial_service_status_brok(brok)
-            else:
-                self.manage_initial_host_status_brok(brok)
-            # print brok.data
-        return new_brok
+        logger.info("[glpidb] Connected")
 
     # Get a brok, parse it, and put in in database
-    # We call functions like manage_ TYPEOFBROK _brok that return us queries
     def manage_brok(self, b):
-        # if b.type != 'log':
-            # logger.warning("[GLPIdb Broker] manage_brok %s" % (b.type))
-        
-        type = b.type
-        
-        # Used to generate cache
-        manager = 'manage_' + type + '_brok'
-        if hasattr(self, manager):
-            new_b = self.preprocess(type, b, 0)
-        
-        # Update service/host in GLPI DB
-        manager = 'manage_' + type + '_update_brok'
-        if hasattr(self, manager):
-            if 'host_name' in b.data:
-                if not b.data['host_name'] in self.cache_host_id or self.cache_host_id[b.data['host_name']] == -1:
-                    logger.debug("[GLPIdb Broker] host is not defined in Glpi : %s." % b.data['host_name'])
-                    return
-                    
-            new_b = self.preprocess(type, b, 0)
-            f = getattr(self, manager)
-            queries = f(new_b)
-            # Ok, we've got queries, now: run them!
-            for q in queries:
-                logger.info("[GLPIdb Broker] MySQL query %s" % q)
-                self.db_backend.execute_query(q)
-        
-        # Add event + perfdata in GLPI DB
-        manager = 'manage_' + type + '_addevent_brok'
-        if hasattr(self, manager):
-            if 'host_name' in b.data:
-                if not b.data['host_name'] in self.cache_host_id or self.cache_host_id[b.data['host_name']] == -1:
-                    logger.debug("[GLPIdb Broker] host is not defined in Glpi : %s." % b.data['host_name'])
-                    return
-                    
-            new_b = self.preprocess(type, b, '1')
-            if 'host_name' in new_b.data:
-                if 'service_description' not in new_b.data:
-                    return
-            f = getattr(self, manager)
-            queries = f(new_b)
-            # Ok, we've got queries, now: run them!
-            for q in queries:
-                logger.info("[GLPIdb Broker] MySQL query %s" % q)
-                self.db_backend.execute_query(q)
+        # Build initial host state cache
+        if b.type == 'initial_host_status':
+            host_name = b.data['host_name']
+            logger.debug("[glpidb] initial host status : %s", host_name)
 
-    ## Host result
-    ## def manage_host_check_result_brok(self, b):
-    ##     logger.info("[GLPIdb Broker] data in DB %s " % b)
-    ##     b.data['date'] = time.strftime('%Y-%m-%d %H:%M:%S')
-    ##     query = self.db_backend.create_insert_query('glpi_plugin_monitoring_serviceevents', b.data)
-    ##     return [query]
-
-
-    ## Host result
-    def manage_host_check_result_update_brok(self, b):
-        if 'host_name' in b.data:
-            if not b.data['host_name'] in self.cache_host_id or self.cache_host_id[b.data['host_name']] == -1:
-                logger.debug("[GLPIdb Broker] host is not defined in Glpi : %s." % b.data['host_name'])
+            try:
+                logger.debug("[glpidb] initial host status : %s : %s", host_name, b.data['customs'])
+                self.hosts_cache[host_name] = {'hostsid': b.data['customs']['_HOSTID'], 'itemtype': b.data['customs']['_ITEMTYPE'], 'items_id': b.data['customs']['_ITEMSID'] }
+            except:
+                self.hosts_cache[host_name] = {'items_id': None}
+                logger.debug("[glpidb] no custom _HOSTID and/or _ITEMTYPE and/or _ITEMSID for %s", host_name)
+                
+            logger.debug("[glpidb] initial host status : %s is %s", host_name, self.hosts_cache[host_name]['items_id'])
+        
+        # Build initial service state cache
+        if b.type == 'initial_service_status':
+            host_name = b.data['host_name']
+            service_description = b.data['service_description']
+            service_id = host_name+"/"+service_description
+            logger.debug("[glpidb] initial service status : %s", service_id)
+            
+            if not host_name in self.hosts_cache or self.hosts_cache[host_name]['items_id'] is None:
+                logger.debug("[glpidb] initial service status, host is not defined in Glpi : %s.", host_name)
                 return
 
-        logger.info("[GLPIdb Broker] Host data in DB %s " % b)
+            try:
+                logger.debug("[glpidb] initial service status : %s : %s", service_id, b.data['customs'])
+                self.services_cache[service_id] = {'itemtype': b.data['customs']['_ITEMTYPE'], 'items_id': b.data['customs']['_ITEMSID'] }
+            except:
+                self.services_cache[service_id] = {'items_id': None}
+                logger.debug("[glpidb] no custom _ITEMTYPE and/or _ITEMSID for %s", service_id)
+                
+            logger.debug("[glpidb] initial service status : %s is %s", service_id, self.services_cache[service_id]['items_id'])
         
-        new_data = copy.deepcopy(b.data)
-        new_data['last_check'] = time.strftime('%Y-%m-%d %H:%M:%S')
-        new_data['host_id'] = self.cache_host_id[new_data['host_name']]
-        new_data['items_id'] = self.cache_host_items_id[new_data['host_name']]
-        new_data['itemtype'] = self.cache_host_itemtype[new_data['host_name']]
-        # del new_data['perf_data']
-        # del new_data['output']
-        # del new_data['latency']
-        # del new_data['execution_time']
-        new_data['event'] = "%s \n %s" % (new_data['event'], new_data['long_output'])
-        del new_data['long_output']
-        del new_data['host_name']
-        if (new_data['state'] == 'UP') and new_data['host_id'] != -1:
-            new_data['is_acknowledged'] = 0
-
-            queryAck = "UPDATE glpi_plugin_monitoring_acknowledges set end_time='%s', expired='1' WHERE expired='0' and items_id='%s' and itemtype='%s'" % (time.strftime('%Y-%m-%d %H:%M:%S'), new_data['host_id'], "PluginMonitoringHost")
-            logger.debug("[GLPIdb Broker] Acknowledge host query %s " % queryAck)
+        # Manage host check result if host is defined in Glpi DB
+        if b.type == 'host_check_result':
+            host_name = b.data['host_name']
+            logger.debug("[glpidb] host check result: %s: %s", host_name, b.data)
             
-        del new_data['host_id']
-        # del new_data['items_id']
-        # del new_data['itemtype']
-        where_clause = {'items_id': new_data['items_id'], 'itemtype': new_data['itemtype']}
-        query = self.db_backend.create_update_query('glpi_plugin_monitoring_hosts', new_data, where_clause)
-        try:
-            return [query, queryAck]
-        except NameError:
-            return [query]
+            # Update Shinken state table 
+            if self.update_shinken_state:
+                self.record_shinken_state(host_name, '', b)
+                
+            if host_name in self.hosts_cache and self.hosts_cache[host_name]['items_id'] is not None:
+                start = time.time()
+                self.record_host_check_result(b)
+                logger.debug("[glpidb] host check result: %s, %d seconds", host_name, time.time() - start)
+                
+        # Manage service check result if service is defined in Glpi DB
+        if b.type == 'service_check_result':
+            host_name = b.data['host_name']
+            service_description = b.data['service_description']
+            service_id = host_name+"/"+service_description
+            logger.debug("[glpidb] service check result: %s", service_id)
             
-    # Add service event (state + perfdata)
-    def manage_service_check_result_addevent_brok(self, b):
-        # if 'host_name' in b.data:
-            # if not b.data['host_name'] in self.cache_host_id or self.cache_host_id[data['host_name']] == -1:
-                # logger.info("[GLPIdb Broker] host is not defined in Glpi : %s." % b.data['host_name'])
-                # return
+            # Update Shinken state table 
+            if self.update_shinken_state:
+                self.record_shinken_state(host_name, service_description, b)
+                
+            if host_name in self.hosts_cache and self.hosts_cache[host_name]['items_id'] is not None:
+                if service_id in self.services_cache and self.services_cache[service_id]['items_id'] is not None:
+                    start = time.time()
+                    self.record_service_check_result(b)
+                    logger.debug("[glpidb] service check result: %s, %d seconds", service_id, time.time() - start)
+                
+        return
 
-        if not b.data['host_name'] in self.cache_service_itemtype or not b.data['service_description'] in self.cache_service_itemtype[b.data['host_name']]:
-            logger.debug("[GLPIdb Broker] cache not ready ")
-            return ''
-
-        logger.debug("[GLPIdb Broker] Data in DB %s" % b)
-
-        b.data['date'] = time.strftime('%Y-%m-%d %H:%M:%S')
-        b.data['plugin_monitoring_services_id'] = self.cache_service_items_id[b.data['host_name']][b.data['service_description']]
-        del b.data['host_name']
-        del b.data['service_description']
-        b.data['event'] = "%s \n %s" % (b.data['event'], b.data['long_output'])
-        del b.data['long_output']
-        # del b.data['output']
-        query = self.db_backend.create_insert_query('glpi_plugin_monitoring_serviceevents', b.data)
-        return [query]
-
-    # Update service 
-    def manage_service_check_result_update_brok(self, b):
-        """If a host is defined locally (in shinken) and not in GLPI,
-           we must not edit GLPI datas!
-        """
-        if not b.data['host_name'] in self.cache_service_itemtype or not b.data['service_description'] in self.cache_service_itemtype[b.data['host_name']]:
-            logger.debug("[GLPIdb Broker] host is not defined in Glpi.")
-            return []
-
-        logger.info("[GLPIdb Broker] Service data in DB %s " % str(b.data))
+    ## Host result
+    def record_host_check_result(self, b):
+        host_name = b.data['host_name']
+        host_cache = self.hosts_cache[host_name]
+        logger.debug("[glpidb] host check result: %s: %s", host_name, b.data)
         
-        new_data = copy.deepcopy(b.data)
-        new_data['last_check'] = time.strftime('%Y-%m-%d %H:%M:%S')
-        new_data['items_id'] = self.cache_service_items_id[new_data['host_name']][new_data['service_description']]
-        new_data['itemtype'] = self.cache_service_itemtype[new_data['host_name']][new_data['service_description']]
-        new_data['event'] = "%s \n %s" % (new_data['event'], new_data['long_output'])
-        del new_data['long_output']
-        del new_data['perf_data']
-        # del new_data['output']
-        del new_data['latency']
-        del new_data['execution_time']
-        if (new_data['state'] == 'OK'):
-            new_data['is_acknowledged'] = 0
+        if self.update_hosts:
+            data = {}
+            data['event'] = ("%s \n %s", b.data['output'], b.data['long_output']) if (len(b.data['long_output']) > 0) else b.data['output']
+            data['state'] = b.data['state']
+            data['state_type'] = b.data['state_type']
+            data['last_check'] = datetime.datetime.fromtimestamp( int(b.data['last_chk']) ).strftime('%Y-%m-%d %H:%M:%S')
+            data['perf_data'] = b.data['perf_data']
+            data['latency'] = b.data['latency']
+            data['execution_time'] = b.data['execution_time']
+            data['is_acknowledged'] = '1' if b.data['problem_has_been_acknowledged'] else '0'
             
-            queryAck = "UPDATE glpi_plugin_monitoring_acknowledges set end_time='%s', expired='1' WHERE expired='0' and items_id='%s' and itemtype='%s'" % (time.strftime('%Y-%m-%d %H:%M:%S'), new_data['items_id'], "PluginMonitoring%s" % new_data['itemtype'])
-            logger.debug("[GLPIdb Broker] Acknowledge service query %s " % queryAck)
-            
-        new_data['id'] = self.cache_service_items_id[b.data['host_name']][b.data['service_description']]
-        del new_data['host_name']
-        del new_data['service_description']
-        table = 'glpi_plugin_monitoring_services'
-        if self.cache_service_itemtype[b.data['host_name']][b.data['service_description']] == 'ServiceCatalog':
-            table = 'glpi_plugin_monitoring_servicescatalogs'
+            where_clause = {'items_id': host_cache['items_id'], 'itemtype': host_cache['itemtype']}
+            query = self.db_backend.create_update_query('glpi_plugin_monitoring_hosts', data, where_clause)
+            try:
+                self.db_backend.execute_query(query)
+            except Exception as exp:
+                logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
 
-        del new_data['items_id']
-        del new_data['itemtype']
-        where_clause = {'id': new_data['id']}
-        query = self.db_backend.create_update_query(table, new_data, where_clause)
+        # Update acknowledge table if host becomes UP
+        if self.update_acknowledges and b.data['state_id'] == 0 and b.data['last_state_id'] != 0:
+            data = {}
+            data['end_time'] = datetime.datetime.fromtimestamp( int(b.data['last_chk']) ).strftime('%Y-%m-%d %H:%M:%S')
+            data['expired'] = '1' 
+
+            logger.info("[glpidb] host check data: %s", data)
+            where_clause = {'items_id': host_cache['items_id'], 'itemtype': host_cache['itemtype']}
+            query = self.db_backend.create_update_query('glpi_plugin_monitoring_acknowledges', data, where_clause)
+            try:
+                self.db_backend.execute_query(query)
+            except Exception as exp:
+                logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
+
+    ## Service result
+    def record_service_check_result(self, b):
+        host_name = b.data['host_name']
+        service_description = b.data['service_description']
+        service_id = host_name+"/"+service_description
+        service_cache = self.services_cache[service_id]
+        logger.debug("[glpidb] service check result: %s: %s", service_id, b.data)
+        
+        # Insert into serviceevents log table
+        if self.update_services_events:
+            data = {}
+            data['plugin_monitoring_services_id'] = service_cache['items_id']
+            data['date'] = datetime.datetime.fromtimestamp( int(b.data['last_chk']) ).strftime('%Y-%m-%d %H:%M:%S')
+            data['event'] = ("%s \n %s", b.data['output'], b.data['long_output']) if (len(b.data['long_output']) > 0) else b.data['output']
+            data['state'] = b.data['state']
+            data['state_type'] = b.data['state_type']
+            data['perf_data'] = b.data['perf_data']
+            data['latency'] = b.data['latency']
+            data['execution_time'] = b.data['execution_time']
+            
+            query = self.db_backend.create_insert_query('glpi_plugin_monitoring_serviceevents', data)
+            try:
+                self.db_backend.execute_query(query)
+            except Exception as exp:
+                logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
+
+        # Update service state table
+        if self.update_services:
+            data = {}
+            data['event'] = ("%s \n %s", b.data['output'], b.data['long_output']) if (len(b.data['long_output']) > 0) else b.data['output']
+            data['state'] = b.data['state']
+            data['state_type'] = b.data['state_type']
+            data['last_check'] = datetime.datetime.fromtimestamp( int(b.data['last_chk']) ).strftime('%Y-%m-%d %H:%M:%S')
+            data['is_acknowledged'] = '1' if b.data['problem_has_been_acknowledged'] else '0'
+            
+            where_clause = {'id': service_cache['items_id']}
+            table = 'glpi_plugin_monitoring_services'
+            if service_cache['itemtype'] == 'ServiceCatalog':
+                table = 'glpi_plugin_monitoring_servicescatalogs'
+            query = self.db_backend.create_update_query(table, data, where_clause)
+            try:
+                self.db_backend.execute_query(query)
+            except Exception as exp:
+                logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
+
+        # Update acknowledge table if service becomes UP
+        if self.update_acknowledges and b.data['state_id'] == 0 and b.data['last_state_id'] != 0:
+            data = {}
+            data['end_time'] = datetime.datetime.fromtimestamp( int(b.data['last_chk']) ).strftime('%Y-%m-%d %H:%M:%S')
+            data['expired'] = '1' 
+
+            logger.info("[glpidb] host check data: %s", data)
+            where_clause = {'items_id': service_cache['items_id'], 'itemtype': service_cache['itemtype']}
+            query = self.db_backend.create_update_query('glpi_plugin_monitoring_acknowledges', data, where_clause)
+            try:
+                self.db_backend.execute_query(query)
+            except Exception as exp:
+                logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
+        
+    ## Update Shinken all hosts/services state
+    def record_shinken_state(self, hostname, service, b):
+        # Insert/update shinken state table
+        # Select perfdata regexp
+        exists = None
+        query = "SELECT COUNT(*) AS nbRecords FROM `glpi_plugin_monitoring_shinken_states` WHERE hostname='%s' AND service='%s';" % (hostname, service)
         try:
-            return [query, queryAck]
-        except NameError:
-            return [query]
+            self.db_backend.execute_query(query)
+            res = self.db_backend.fetchone()
+            exists = True if res[0] > 0 else False
+        except Exception as exp:
+            # No more table update because table does not exist or is bad formed ...
+            self.update_shinken_state = False
+            logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
+            
+        data = {}
+        data['hostname'] = hostname
+        data['service'] = service
+        data['state'] = b.data['state_id']
+        data['state_type'] = b.data['state_type']
+        data['last_output'] = ("%s \n %s", b.data['output'], b.data['long_output']) if (len(b.data['long_output']) > 0) else b.data['output']
+        data['last_check'] = datetime.datetime.fromtimestamp( int(b.data['last_chk']) ).strftime('%Y-%m-%d %H:%M:%S')
+        data['last_perfdata'] = b.data['perf_data']
+        data['is_ack'] = '1' if b.data['problem_has_been_acknowledged'] else '0'
+        
+        if exists:
+            where_clause = {'hostname': hostname, 'service': service}
+            query = self.db_backend.create_update_query('glpi_plugin_monitoring_shinken_states', data, where_clause)
+            try:
+                self.db_backend.execute_query(query)
+            except Exception as exp:
+                logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
+        else:
+            query = self.db_backend.create_insert_query('glpi_plugin_monitoring_shinken_states', data)
+            try:
+                self.db_backend.execute_query(query)
+            except Exception as exp:
+                logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
+    
+    def main(self):
+        self.set_proctitle(self.name)
+        self.set_exit_handler()
+        while not self.interrupted:
+            logger.debug("[glpidb] queue length: %s", self.to_q.qsize())
+            start = time.time()
+            l = self.to_q.get()
+            for b in l:
+                b.prepare()
+                self.manage_brok(b)
+
+            logger.debug("[glpidb] time to manage %s broks (%d secs)", len(l), time.time() - start)
