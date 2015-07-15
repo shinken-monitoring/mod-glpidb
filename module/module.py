@@ -366,8 +366,8 @@ class Glpidb_broker(BaseModule):
             return
 
         # Ignoring SOFT states ...
-        if b.data['state_type_id']==0:
-            logger.warning("[glpidb] record availability for: %s/%s, but no HARD state, ignoring ...", hostname, service)
+        # if b.data['state_type_id']==0:
+            # logger.warning("[glpidb] record availability for: %s/%s, but no HARD state, ignoring ...", hostname, service)
 
 
         midnight = datetime.datetime.combine(datetime.date.today(), datetime.time.min)
@@ -407,7 +407,7 @@ class Glpidb_broker(BaseModule):
         try:
             self.db_backend.execute_query(query)
             res = self.db_backend.fetchone()
-            logger.warning("[glpidb] record availability, select query result: %s", res)
+            logger.debug("[glpidb] record availability, select query result: %s", res)
                 # (9L, 'sim-0001', '', datetime.date(2015, 6, 9), 0, 0L, 0L, 0L, 0L, 86400L, 1, 1433854693L, 1, 1433854693L)
             exists = True if res is not None else False
         except Exception as exp:
@@ -434,7 +434,7 @@ class Glpidb_broker(BaseModule):
         last_check_state = res[12] if res else 3
         last_check_timestamp = res[13] if res else midnight_timestamp
         since_last_state = 0
-        logger.warning("[glpidb] current state: %s, last state: %s", current_state, last_state)
+        logger.debug("[glpidb] current state: %s, last state: %s", current_state, last_state)
 
         # Host check
         if service=='':
@@ -492,7 +492,7 @@ class Glpidb_broker(BaseModule):
 
             where_clause = {'hostname': hostname, 'service': service, 'day': day}
             query = self.db_backend.create_update_query('glpi_plugin_monitoring_availabilities', data, where_clause)
-            logger.warning("[glpidb] record availability, update query: %s", query)
+            logger.debug("[glpidb] record availability, update query: %s", query)
             try:
                 self.db_backend.execute_query(query)
             except Exception as exp:
@@ -512,7 +512,7 @@ class Glpidb_broker(BaseModule):
             data['daily_4'] = 86400
 
             query = self.db_backend.create_insert_query('glpi_plugin_monitoring_availabilities', data)
-            logger.warning("[glpidb] record availability, insert query: %s", query)
+            logger.debug("[glpidb] record availability, insert query: %s", query)
             try:
                 self.db_backend.execute_query(query)
             except Exception as exp:
