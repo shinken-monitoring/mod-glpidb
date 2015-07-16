@@ -274,7 +274,7 @@ class Glpidb_broker(BaseModule):
             data['end_time'] = datetime.datetime.fromtimestamp( int(b.data['last_chk']) ).strftime('%Y-%m-%d %H:%M:%S')
             data['expired'] = '1'
 
-            where_clause = {'items_id': service_cache['items_id'], 'itemtype': service_cache['itemtype']}
+            where_clause = {'items_id': service_cache['items_id'], 'itemtype': "PluginMonitoringService"}
             query = self.db_backend.create_update_query('glpi_plugin_monitoring_acknowledges', data, where_clause)
             logger.debug("[glpidb] acknowledge query: %s", query)
             try:
