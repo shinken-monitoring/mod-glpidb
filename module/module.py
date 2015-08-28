@@ -7,6 +7,8 @@
 #    Gerhard Lausser, Gerhard.Lausser@consol.de
 #    Gregory Starck, g.starck@gmail.com
 #    Hartmut Goebel, h.goebel@goebel-consult.de
+#    David Durieux, d.durieux@siprossii
+#    Frédéric Mohier, frederic.mohier@gmail.com
 #
 # This file is part of Shinken.
 #
@@ -332,8 +334,8 @@ class Glpidb_broker(BaseModule):
     def record_availability(self, hostname, service, b):
         # Insert/update in shinken state table
         logger.debug("[glpidb] record availability: %s/%s: %s", hostname, service, b.data)
-        if hostname.startswith('sim'):
-            logger.warning("[glpidb] record availability: %s/%s: %s", hostname, service, b.data)
+        # if hostname.startswith('sim'):
+            # logger.warning("[glpidb] record availability: %s/%s: %s", hostname, service, b.data)
 
         # Host check brok:
         # ----------------
