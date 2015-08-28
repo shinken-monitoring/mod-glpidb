@@ -364,8 +364,8 @@ class Glpidb_broker(BaseModule):
             # return
 
         # Only for host check ...
-        if not service is '':
-            return
+        # if not service is '':
+            # return
 
         # Ignoring SOFT states ...
         # if b.data['state_type_id']==0:
@@ -454,15 +454,10 @@ class Glpidb_broker(BaseModule):
 
             elif current_state == 'DOWN':
                 since_last_state = int(last_state_change - last_check_timestamp)
-
         # Service check
-        # else:
-            # To be implemented !!!
-            # if hostname.startswith('sim'):
-                # logger.warning("[glpidb] last_time_unknown: %d", b.data['last_time_unknown'])
-                # logger.warning("[glpidb] last_time_ok: %d", b.data['last_time_ok'])
-                # logger.warning("[glpidb] last_time_warning: %d", b.data['last_time_warning'])
-                # logger.warning("[glpidb] last_time_critical: %d", b.data['last_time_critical'])
+        else:
+            last_state_change = int(time.time())
+            since_last_state = int(last_state_change - last_check_timestamp)
 
         # Update existing record
         if exists:
