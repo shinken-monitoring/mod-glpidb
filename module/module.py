@@ -35,11 +35,16 @@ import copy
 import time
 import datetime
 import sys
-#import MySQLdb
+
+import MySQLdb
+from MySQLdb import IntegrityError
+from MySQLdb import ProgrammingError
 
 
 from shinken.basemodule import BaseModule
 from shinken.log import logger
+
+from collections import deque
 
 properties = {
     'daemons': ['broker'],
@@ -87,14 +92,263 @@ class Glpidb_broker(BaseModule):
         logger.info("[glpidb] updating services states: %s", self.update_services)
         logger.info("[glpidb] updating acknowledges states: %s", self.update_acknowledges)
 
-    def init(self):
-        from shinken.db_mysql import DBMysql
-        logger.info("[glpidb] Creating a mysql backend : %s (%s)" % (self.host, self.database))
-        self.db_backend = DBMysql(self.host, self.user, self.password, self.database, self.character_set)
+        self.db = None
+        self.db_cursor = None
+        self.is_connected = False
 
-        logger.info("[glpidb] Connecting to database ...")
-        self.db_backend.connect_database()
-        logger.info("[glpidb] Connected")
+        self.events_cache = deque()
+
+        self.commit_period = int(getattr(modconf, 'commit_period', '60'))
+        self.commit_volume = int(getattr(modconf, 'commit_volume', '1000'))
+        self.db_test_period = int(getattr(modconf, 'db_test_period', '0'))
+        logger.info('[glpidb] periodical commit period: %ds', self.commit_period)
+        logger.info('[glpidb] periodical commit volume: %d lines', self.commit_volume)
+        logger.info('[glpidb] periodical DB connection test period: %ds', self.db_test_period)
+
+    def init(self):
+        return True
+
+    def open(self):
+        """
+        Connect to the MySQL DB.
+        """
+        try:
+            logger.info("[glpidb] Connecting to database %s (%s) ..." % (self.host, self.database))
+            self.db = MySQLdb.connect(host=self.host, user=self.user,
+                                      passwd=self.password, db=self.database,
+                                      port=self.port)
+            self.db.set_character_set(self.character_set)
+            self.db_cursor = self.db.cursor()
+            self.db_cursor.execute('SET NAMES %s;' % self.character_set)
+            self.db_cursor.execute('SET CHARACTER SET %s;' % self.character_set)
+            self.db_cursor.execute('SET character_set_connection=%s;' %
+                                   self.character_set)
+
+            self.is_connected = True
+            logger.info('[glpidb] database connection established')
+        except Exception as e:
+            logger.error("[glpidb] database connection error: %s", str(e))
+            self.is_connected = False
+
+        return self.is_connected
+
+    def close(self):
+        self.is_connected = False
+        logger.info('[glpidb] database connection closed')
+
+    def stringify(self, val):
+        """Get a unicode from a value"""
+        # If raw string, go in unicode
+        if isinstance(val, str):
+            val = val.decode('utf8', 'ignore').replace("'", "''")
+        elif isinstance(val, unicode):
+            val = val.replace("'", "''")
+        else:  # other type, we can str
+            val = unicode(str(val))
+            val = val.replace("'", "''")
+        return val
+
+    def create_insert_query(self, table, data):
+        """Create a INSERT query in table with all data of data (a dict)"""
+        query = u"INSERT INTO %s " % (table)
+        props_str = u' ('
+        values_str = u' ('
+        i = 0  # f or the ',' problem... look like C here...
+        for prop in data:
+            i += 1
+            val = data[prop]
+            # Boolean must be catch, because we want 0 or 1, not True or False
+            if isinstance(val, bool):
+                if val:
+                    val = 1
+                else:
+                    val = 0
+
+            # Get a string of the value
+            val = self.stringify(val)
+
+            if i == 1:
+                props_str = props_str + u"%s " % prop
+                values_str = values_str + u"'%s' " % val
+            else:
+                props_str = props_str + u", %s " % prop
+                values_str = values_str + u", '%s' " % val
+
+        # Ok we've got data, let's finish the query
+        props_str = props_str + u' )'
+        values_str = values_str + u' )'
+        query = query + props_str + u' VALUES' + values_str
+        return query
+
+    def create_update_query(self, table, data, where_data):
+        """Create a update query of table with data, and use where data for
+        the WHERE clause
+        """
+        query = u"UPDATE %s set " % (table)
+
+        # First data manage
+        query_follow = ''
+        i = 0  # for the , problem...
+        for prop in data:
+            # Do not need to update a property that is in where
+            # it is even dangerous, will raise a warning
+            if prop not in where_data:
+                i += 1
+                val = data[prop]
+                # Boolean must be catch, because we want 0 or 1, not True or False
+                if isinstance(val, bool):
+                    if val:
+                        val = 1
+                    else:
+                        val = 0
+
+                # Get a string of the value
+                val = self.stringify(val)
+
+                if i == 1:
+                    query_follow += u"%s='%s' " % (prop, val)
+                else:
+                    query_follow += u", %s='%s' " % (prop, val)
+
+        # Ok for data, now WHERE, same things
+        where_clause = u" WHERE "
+        i = 0  # For the 'and' problem
+        for prop in where_data:
+            i += 1
+            val = where_data[prop]
+            # Boolean must be catch, because we want 0 or 1, not True or False
+            if isinstance(val, bool):
+                if val:
+                    val = 1
+                else:
+                    val = 0
+
+            # Get a string of the value
+            val = self.stringify(val)
+
+            if i == 1:
+                where_clause += u"%s='%s' " % (prop, val)
+            else:
+                where_clause += u"and %s='%s' " % (prop, val)
+
+        query = query + query_follow + where_clause
+        return query
+
+    def execute_query(self, query, do_debug=False):
+        """Just run the query
+        TODO: finish catch
+        """
+        logger.debug("[glpidb] run query %s", query)
+        try:
+            self.db_cursor.execute(query)
+            self.db.commit()
+            return True
+        except IntegrityError, exp:
+            logger.warning("[glpidb] A query raised an integrity error: %s, %s", query, exp)
+            return False
+        except ProgrammingError, exp:
+            logger.warning("[glpidb] A query raised a programming error: %s, %s", query, exp)
+            return False
+
+    def fetchone(self):
+        """Just get an entry"""
+        return self.db_cursor.fetchone()
+
+    def fetchall(self):
+        """Get all entry"""
+        return self.db_cursor.fetchall()
+
+    def bulk_insert(self):
+        """
+        Peridically called (commit_period), this method prepares a bunch of queued
+        insertions (max. commit_volume) to insert them in the DB.
+        """
+        logger.info("[glpidb] bulk insertion ... %d events in cache (max insertion is %d lines)", len(self.events_cache), self.commit_volume)
+
+        if not self.events_cache:
+            logger.info("[glpidb] bulk insertion ... nothing to insert.")
+            return
+
+        if not self.is_connected:
+            if not self.open():
+                logger.warning("[glpidb] database is not connected and connection failed")
+                logger.warning("[glpidb] %d events to insert in database", len(self.events_cache))
+                return
+
+        logger.info("[glpidb] %d lines to insert in database (max insertion is %d lines)", len(self.events_cache), self.commit_volume)
+
+        # Flush all the stored log lines
+        events_to_commit = 1
+        now = time.time()
+        some_events = []
+
+        # Prepare a query as:
+        # INSERT INTO tbl_name (a,b,c)
+        # VALUES (1,2,3), (4,5,6), (7,8,9);
+        query = u"INSERT INTO `glpi_plugin_monitoring_serviceevents` "
+
+        first = True
+        while True:
+            try:
+                event = self.events_cache.popleft()
+
+                if first:
+                    props_str = u' ('
+                    i = 0
+                    for prop in event:
+                        i += 1
+                        if i == 1:
+                            props_str = props_str + u"%s " % prop
+                        else:
+                            props_str = props_str + u", %s " % prop
+                    props_str = props_str + u')'
+                    query = query + props_str + u' VALUES'
+                    first = False
+
+                i = 0
+                values_str = u' ('
+                for prop in event:
+                    i += 1
+                    val = event[prop]
+                    # Boolean must be catched, because we want 0 or 1, not True or False
+                    if isinstance(val, bool):
+                        if val:
+                            val = 1
+                        else:
+                            val = 0
+
+                    # Get a string for the value
+                    val = self.stringify(val)
+
+                    if i == 1:
+                        values_str = values_str + u"'%s' " % val
+                    else:
+                        values_str = values_str + u", '%s' " % val
+                values_str = values_str + u')'
+
+                if events_to_commit == 1:
+                    query = query + values_str
+                else:
+                    query = query + u"," + values_str
+
+                events_to_commit = events_to_commit + 1
+                if events_to_commit >= self.commit_volume:
+                    break
+            except IndexError:
+                logger.debug("[glpidb] prepared all available events for commit")
+                break
+            except Exception, exp:
+                logger.error("[glpidb] exception: %s", str(exp))
+        logger.info("[glpidb] time to prepare %s events for commit (%2.4f)", events_to_commit-1, time.time() - now)
+        logger.info("[glpidb] query: %s", query)
+
+        now = time.time()
+        try:
+            self.execute_query(query)
+        except Exception as e:
+            logger.error("[glpidb] error '%s' when executing query: %s", e, query)
+            self.close()
+        logger.info("[glpidb] time to insert %s line (%2.4f)", events_to_commit-1, time.time() - now)
 
     # Get a brok, parse it, and put in in database
     def manage_brok(self, b):
@@ -196,9 +450,9 @@ class Glpidb_broker(BaseModule):
             data['is_acknowledged'] = '1' if b.data['problem_has_been_acknowledged'] else '0'
 
             where_clause = {'items_id': host_cache['items_id'], 'itemtype': host_cache['itemtype']}
-            query = self.db_backend.create_update_query('glpi_plugin_monitoring_hosts', data, where_clause)
+            query = self.create_update_query('glpi_plugin_monitoring_hosts', data, where_clause)
             try:
-                self.db_backend.execute_query(query)
+                self.execute_query(query)
             except Exception as exp:
                 logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
 
@@ -211,10 +465,10 @@ class Glpidb_broker(BaseModule):
             data['expired'] = '1'
 
             where_clause = {'items_id': host_cache['items_id'], 'itemtype': "PluginMonitoringHost"}
-            query = self.db_backend.create_update_query('glpi_plugin_monitoring_acknowledges', data, where_clause)
+            query = self.create_update_query('glpi_plugin_monitoring_acknowledges', data, where_clause)
             logger.debug("[glpidb] acknowledge query: %s", query)
             try:
-                self.db_backend.execute_query(query)
+                self.execute_query(query)
             except Exception as exp:
                 logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
 
@@ -233,6 +487,7 @@ class Glpidb_broker(BaseModule):
 
         # Insert into serviceevents log table
         if self.update_services_events:
+            logger.info("[glpidb] append data to events_cache for service: %s", service_id)
             data = {}
             data['plugin_monitoring_services_id'] = service_cache['items_id']
             data['date'] = datetime.datetime.fromtimestamp( int(b.data['last_chk']) ).strftime('%Y-%m-%d %H:%M:%S')
@@ -243,11 +498,8 @@ class Glpidb_broker(BaseModule):
             data['latency'] = b.data['latency']
             data['execution_time'] = b.data['execution_time']
 
-            query = self.db_backend.create_insert_query('glpi_plugin_monitoring_serviceevents', data)
-            try:
-                self.db_backend.execute_query(query)
-            except Exception as exp:
-                logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
+            # Append to bulk insert queue ...
+            self.events_cache.append(data)
 
         # Update service state table
         if self.update_services:
@@ -262,9 +514,9 @@ class Glpidb_broker(BaseModule):
             table = 'glpi_plugin_monitoring_services'
             if service_cache['itemtype'] == 'ServiceCatalog':
                 table = 'glpi_plugin_monitoring_servicescatalogs'
-            query = self.db_backend.create_update_query(table, data, where_clause)
+            query = self.create_update_query(table, data, where_clause)
             try:
-                self.db_backend.execute_query(query)
+                self.execute_query(query)
             except Exception as exp:
                 logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
 
@@ -277,10 +529,10 @@ class Glpidb_broker(BaseModule):
             data['expired'] = '1'
 
             where_clause = {'items_id': service_cache['items_id'], 'itemtype': "PluginMonitoringService"}
-            query = self.db_backend.create_update_query('glpi_plugin_monitoring_acknowledges', data, where_clause)
+            query = self.create_update_query('glpi_plugin_monitoring_acknowledges', data, where_clause)
             logger.debug("[glpidb] acknowledge query: %s", query)
             try:
-                self.db_backend.execute_query(query)
+                self.execute_query(query)
             except Exception as exp:
                 logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
 
@@ -293,8 +545,8 @@ class Glpidb_broker(BaseModule):
         exists = None
         query = "SELECT COUNT(*) AS nbRecords FROM `glpi_plugin_monitoring_shinkenstates` WHERE hostname='%s' AND service='%s';" % (hostname, service)
         try:
-            self.db_backend.execute_query(query)
-            res = self.db_backend.fetchone()
+            self.execute_query(query)
+            res = self.fetchone()
             exists = True if res[0] > 0 else False
         except Exception as exp:
             # No more table update because table does not exist or is bad formed ...
@@ -318,15 +570,15 @@ class Glpidb_broker(BaseModule):
 
         if exists:
             where_clause = {'hostname': hostname, 'service': service}
-            query = self.db_backend.create_update_query('glpi_plugin_monitoring_shinkenstates', data, where_clause)
+            query = self.create_update_query('glpi_plugin_monitoring_shinkenstates', data, where_clause)
             try:
-                self.db_backend.execute_query(query)
+                self.execute_query(query)
             except Exception as exp:
                 logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
         else:
-            query = self.db_backend.create_insert_query('glpi_plugin_monitoring_shinkenstates', data)
+            query = self.create_insert_query('glpi_plugin_monitoring_shinkenstates', data)
             try:
-                self.db_backend.execute_query(query)
+                self.execute_query(query)
             except Exception as exp:
                 logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
 
@@ -407,8 +659,8 @@ class Glpidb_broker(BaseModule):
                     FROM `glpi_plugin_monitoring_availabilities`
                     WHERE hostname='%s' AND service='%s' AND day='%s';""" % (hostname, service, day)
         try:
-            self.db_backend.execute_query(query)
-            res = self.db_backend.fetchone()
+            self.execute_query(query)
+            res = self.fetchone()
             logger.debug("[glpidb] record availability, select query result: %s", res)
                 # (9L, 'sim-0001', '', datetime.date(2015, 6, 9), 0, 0L, 0L, 0L, 0L, 86400L, 1, 1433854693L, 1, 1433854693L)
             exists = True if res is not None else False
@@ -488,10 +740,10 @@ class Glpidb_broker(BaseModule):
             data['last_check_timestamp'] = int(b.data['last_chk'])
 
             where_clause = {'hostname': hostname, 'service': service, 'day': day}
-            query = self.db_backend.create_update_query('glpi_plugin_monitoring_availabilities', data, where_clause)
+            query = self.create_update_query('glpi_plugin_monitoring_availabilities', data, where_clause)
             logger.debug("[glpidb] record availability, update query: %s", query)
             try:
-                self.db_backend.execute_query(query)
+                self.execute_query(query)
             except Exception as exp:
                 logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
 
@@ -508,19 +760,43 @@ class Glpidb_broker(BaseModule):
             # Ignore computed values because it is the first check received today!
             data['daily_4'] = 86400
 
-            query = self.db_backend.create_insert_query('glpi_plugin_monitoring_availabilities', data)
+            query = self.create_insert_query('glpi_plugin_monitoring_availabilities', data)
             logger.debug("[glpidb] record availability, insert query: %s", query)
             try:
-                self.db_backend.execute_query(query)
+                self.execute_query(query)
             except Exception as exp:
                 logger.error("[glpidb] error '%s' when executing query: %s", exp, query)
 
     def main(self):
         self.set_proctitle(self.name)
         self.set_exit_handler()
+
+        # Open database connection
+        self.open()
+
+        db_commit_next_time = time.time()
+        db_test_connection = time.time()
+
         while not self.interrupted:
             logger.debug("[glpidb] queue length: %s", self.to_q.qsize())
             start = time.time()
+
+            # DB connection test ?
+            if self.db_test_period and db_test_connection < start:
+                logger.debug("[glpidb] Testing database connection ...")
+                # Test connection every N seconds ...
+                db_test_connection = start + self.db_test_period
+                if not self.is_connected:
+                    logger.info("[glpidb] Trying to connect database ...")
+                    self.open()
+
+            # Bulk insert
+            if db_commit_next_time < start:
+                logger.debug("[glpidb] Logs commit time ...")
+                # Commit periodically ...
+                db_commit_next_time = start + self.commit_period
+                self.bulk_insert()
+
             l = self.to_q.get()
             for b in l:
                 b.prepare()
