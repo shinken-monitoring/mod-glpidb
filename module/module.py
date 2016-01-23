@@ -66,6 +66,7 @@ class Glpidb_broker(BaseModule):
 
         # Database configuration
         self.host = getattr(modconf, 'host', '127.0.0.1')
+        self.port = int(getattr(modconf, 'port', '3306'))
         self.user = getattr(modconf, 'user', 'shinken')
         self.password = getattr(modconf, 'password', 'shinken')
         self.database = getattr(modconf, 'database', 'glpidb')
@@ -109,7 +110,7 @@ class Glpidb_broker(BaseModule):
                 self.hosts_cache[host_name] = {'items_id': None}
                 logger.debug("[glpidb] no custom _HOSTID and/or _ITEMTYPE and/or _ITEMSID for %s", host_name)
 
-            logger.debug("[glpidb] initial host status : %s is %s", host_name, self.hosts_cache[host_name]['items_id'])
+            logger.info("[glpidb] initial host status : %s is %s", host_name, self.hosts_cache[host_name]['items_id'])
 
         # Build initial service state cache
         if b.type == 'initial_service_status':
@@ -129,12 +130,12 @@ class Glpidb_broker(BaseModule):
                 self.services_cache[service_id] = {'items_id': None}
                 logger.debug("[glpidb] no custom _ITEMTYPE and/or _ITEMSID for %s", service_id)
 
-            logger.debug("[glpidb] initial service status : %s is %s", service_id, self.services_cache[service_id]['items_id'])
+            logger.info("[glpidb] initial service status : %s is %s", service_id, self.services_cache[service_id]['items_id'])
 
         # Manage host check result if host is defined in Glpi DB
         if b.type == 'host_check_result':
             host_name = b.data['host_name']
-            logger.debug("[glpidb] host check result: %s: %s", host_name, b.data)
+            logger.debug("[glpidb] host check result: %s: %s", host_name)
 
             # Update Shinken state table
             if self.update_shinken_state:
